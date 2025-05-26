@@ -93,26 +93,32 @@ void* handle_client(void* arg) {
     strcpy(customer_name, buffer); //copy ชื่อจาก buffer ไปไว้ใน customer_name
     printf("ลูกค้าใหม่: %s\n", customer_name);
 
-    //รับหมายเลขโต๊ะที่ต้องการจอง
-    recv(clientSd, buffer, sizeof(buffer), 0);
-    table_id = atoi(buffer); //ส่งเลขโต๊ะเป็น str แล้วรับมาโดยการแปลง int
+    while(1) {
 
-    if (table_id < 1 || table_id > MAX_TABLES) {
-        send(clientSd, "หมายเลขโต๊ะไม่ถูกต้อง", 1024, 0);
-        close(clientSd);
-        return NULL;
-    }
+        recv(clientSd, buffer, sizeof(buffer), 0);
+        table_id = atoi(buffer);
 
-    //ตรวจสอบและจองโต๊ะ
-    if (tables[table_id - 1].is_occupied) {
-        send(clientSd, "โต๊ะนี้ถูกจองแล้ว", 1024, 0);
-    } 
-    else {
-        tables[table_id - 1].is_occupied = 1;
-        strcpy(tables[table_id - 1].customer_name, customer_name);
+        if (table_id < 1 || table_id > MAX_TABLES) {
+            send(clientSd, "หมายเลขโต๊ะไม่ถูกต้อง กรุณาเลือกใหม่", 1024, 0);
+            continue;  
+        }
 
-        send(clientSd, "จองโต๊ะสำเร็จ", 1024, 0);
-        printf("%s จองโต๊ะที่ %d\n", customer_name, table_id);
+        if (tables[table_id - 1].is_occupied) {
+            send(clientSd, "โต๊ะนี้ไม่ว่าง กรุณาเลือกโต๊ะอื่น", 1024, 0);
+            continue;
+        }
+
+        else{
+            tables[table_id - 1].is_occupied = 1;
+            strcpy(tables[table_id - 1].customer_name, customer_name);
+            strcpy(tables[table_id - 1].order, "");  // เคลียร์ order
+            send(clientSd, "จองโต๊ะสำเร็จ", 1024, 0);
+            printf("%s จองโต๊ะที่ %d\n", customer_name, table_id);
+            draw_tables(tables, MAX_TABLES);
+            break;  
+        }
+
+
     }
 
     //รับรายการอาหาร วนรับเมนูหลายรายการ
@@ -144,8 +150,6 @@ void* handle_client(void* arg) {
         send(clientSd, "รับออเดอร์แล้ว", 1024, 0);
     }
 
-
-
     close(clientSd);
     return NULL;
 }
@@ -166,15 +170,11 @@ int main() {
 
     bind(sd, (struct sockaddr*)&servAddr, sizeof(servAddr)); //ผูก socket sd กับ IP และ PORT ที่กำหนดไว้ใน servAddr
     listen(sd, 5);
-
-
     printf("Server กำลังรอ client บน port %d...\n", PORT);
 
     while (1) {
         newSd = accept(sd, (struct sockaddr*)&cliAddr, &cliLen); //รอ client 
         printf("Client ใหม่เชื่อมต่อ\n");// ถ้า client เข้ามาจะสร้าง socket ของตัวมันเอง
-
-        
         int* pclient = malloc(sizeof(int)); //จองหน่วยความจำ เฉพาะตัวเอง
         *pclient = newSd;
         pthread_create(&tid, NULL, handle_client, pclient);

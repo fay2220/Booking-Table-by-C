@@ -10,7 +10,7 @@
 
 #define MAX_TABLES 20
 #define TABLES_PER_ROW 4
-#define MAX_MENU 5
+#define MAX_MENU 10
 
 typedef struct {
     int id;                     // เลขโต๊ะ 1-20
@@ -25,58 +25,126 @@ typedef struct {
     float price;
 } MenuItem;
 
+MenuItem menu[MAX_MENU] = {
+    {1, "ข้าวผัด", 50.0},
+    {2, "ผัดไทย", 45.0},
+    {3, "ต้มยำกุ้ง", 60.0},
+    {4, "น้ำเปล่า", 10.0},
+    {5, "ชาเย็น", 25.0},
+    {6, "ข้าวไข่เจียว", 40.0},
+    {7, "สุกี้", 70.0}
+    
+};
+
 Table tables[MAX_TABLES];
 void draw_tables(Table tables[], int total) {
-    int rows = (total + TABLES_PER_ROW - 1) / TABLES_PER_ROW; 
-    int index = 0;
-    
-    printf("=========================================\n");
-    for (int r = 0; r < rows; r++) {
-        //ด้านบน
-        for (int i = 0; i < TABLES_PER_ROW && index + i < total; i++) {
-            printf("#####\t");
-        }
-        printf("\n");
+    printf("╔════════╦═══════════════╦════════════╗\n");
+    printf("║  โต๊ะ   ║   สถานะ       ║  ลูกค้า      ║\n");
+    printf("╠════════╬═══════════════╬════════════╣\n");
 
-        // แถวกลางกับ id
-        for (int i = 0; i < TABLES_PER_ROW && index + i < total; i++) {
-            printf("##%2d#\t", tables[index + i].id);
+    for (int i = 0; i < total; i++) {
+        char* status;
+        char* name;
+        if(tables[i].is_occupied){
+            status = "ไม่ว่าง";
+            name = tables[i].customer_name;
         }
-        printf("\n");
-
-        // ด้านล่าง
-        for (int i = 0; i < TABLES_PER_ROW && index + i < total; i++) {
-            printf("#####\t");
-        }
-        printf("\n");
-
-        // status
-        for (int i = 0; i < TABLES_PER_ROW && index + i < total; i++) {
-            char* status;
-            if(tables[index + i].is_occupied){
-                status  = "ไม่ว่าง";
-            }
-            else {
-                status = "ว่าง";
-            }   
-            printf("(%s)\t", status);
+        else{
+            status = "ว่าง";
+            name = "ยังไม่มีลูกค้า";
         }
 
-        printf("\n\n");
-        index += TABLES_PER_ROW;
+        printf("║  %2d   ║  %-12s ║  %-8s ║\n", tables[i].id, status, name);
     }
-    printf("=========================================\n");
+
+    printf("╚════════╩═══════════════╩════════════╝\n");
+}
+
+float calculate_total_price(char* order) {
+    float total = 0.0;
+    char temp[200];
+    strcpy(temp, order); 
+    char* token = strtok(temp, ","); //copy order ไปไว้ใน tempเพื่อให้ไม่ไปแก้ string ต้นฉบับ
+
+    while (token != NULL) {
+        int id = atoi(token); //แปลงจาก str เป็น int
+        for (int i = 0; i < MAX_MENU; i++) {
+            if (menu[i].id == id) {
+                total += menu[i].price;
+                break;
+            }
+        }
+        token = strtok(NULL, ",");
+    }
+
+    return total;
 }
 
 void* handle_client(void* arg) {
-    int clientSd = *(int*)arg;
-    char buffer[1024];
+    int clientSd = *(int*)arg; //รับ socket ที่ client เชื่อมเข้ามา
+    int table_id;
+    char buffer[1024]; //ตัวแปรชั่วคราวไว้เก็บข้อความที่รับจาก client
+    char customer_name[50];
 
+    free(arg); //คืนหน่วยความจำที่จองไว้ตอน malloc
+
+    //รับชื่อ
+    recv(clientSd, buffer, sizeof(buffer), 0); 
+    strcpy(customer_name, buffer); //copy ชื่อจาก buffer ไปไว้ใน customer_name
+    printf("ลูกค้าใหม่: %s\n", customer_name);
+
+    //รับหมายเลขโต๊ะที่ต้องการจอง
     recv(clientSd, buffer, sizeof(buffer), 0);
-    printf("รับข้อความ: %s\n", buffer);
+    table_id = atoi(buffer); //ส่งเลขโต๊ะเป็น str แล้วรับมาโดยการแปลง int
 
-    char reply[] = "เซิร์ฟเวอร์ตอบกลับ\n";
-    send(clientSd, reply, strlen(reply), 0);
+    if (table_id < 1 || table_id > MAX_TABLES) {
+        send(clientSd, "หมายเลขโต๊ะไม่ถูกต้อง", 1024, 0);
+        close(clientSd);
+        return NULL;
+    }
+
+    //ตรวจสอบและจองโต๊ะ
+    if (tables[table_id - 1].is_occupied) {
+        send(clientSd, "โต๊ะนี้ถูกจองแล้ว", 1024, 0);
+    } 
+    else {
+        tables[table_id - 1].is_occupied = 1;
+        strcpy(tables[table_id - 1].customer_name, customer_name);
+
+        send(clientSd, "จองโต๊ะสำเร็จ", 1024, 0);
+        printf("%s จองโต๊ะที่ %d\n", customer_name, table_id);
+    }
+
+    //รับรายการอาหาร วนรับเมนูหลายรายการ
+    while (1) {
+        memset(buffer, 0, sizeof(buffer)); //เคลียร์ buffer ให้ว่าง เพื่อไม่ให้ข้อความใหม่ซ้อนกับข้อความเก่า
+        recv(clientSd, buffer, sizeof(buffer), 0);
+
+        if (strcmp(buffer, "exit") == 0) {
+            float total = calculate_total_price(tables[table_id - 1].order);
+            char msg[128];
+            sprintf(msg, "ยอดรวมทั้งหมด: %.2f บาท", total);
+            send(clientSd, msg, strlen(msg) + 1, 0);
+
+            // ปล่อยโต๊ะ
+            tables[table_id - 1].is_occupied = 0;
+            strcpy(tables[table_id - 1].customer_name, "");
+            strcpy(tables[table_id - 1].order, "");
+            printf("โต๊ะ %d ถูกปล่อยแล้ว\n", table_id);
+            break;
+        }
+
+        // เพิ่มเมนูต่อท้าย (เช่น "1,4,2")
+        if (strlen(tables[table_id - 1].order) > 0) {
+            strcat(tables[table_id - 1].order, ",");
+        }
+        strcat(tables[table_id - 1].order, buffer);
+
+        printf("โต๊ะ %d สั่งเมนู: %s\n", table_id, tables[table_id - 1].order);
+        send(clientSd, "รับออเดอร์แล้ว", 1024, 0);
+    }
+
+
 
     close(clientSd);
     return NULL;

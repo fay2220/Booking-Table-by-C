@@ -89,6 +89,30 @@ float calculate_total_price(char* order) {
     return total;
 }
 
+FoodOrder food_queue[MAX_FOOD_ORDERS];
+int food_front = 0;
+int food_rear = 0;
+
+pthread_mutex_t food_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t food_cond = PTHREAD_COND_INITIALIZER;
+
+
+int is_food_queue_empty() {
+    return food_front == food_rear;
+}
+
+
+void enqueue_food(int table_id, int menu_id) {
+    food_queue[food_rear].table_id = table_id;
+    food_queue[food_rear].menu_id = menu_id;
+    food_rear = (food_rear + 1) % MAX_FOOD_ORDERS;
+}
+
+FoodOrder dequeue_food() {
+    FoodOrder f = food_queue[food_front];
+    food_front = (food_front + 1) % MAX_FOOD_ORDERS;
+    return f;
+} 
 void* handle_client(void* arg) {
     int clientSd = *(int*)arg; //รับ socket ที่ client เชื่อมเข้ามา
     int table_id;
@@ -169,28 +193,6 @@ void* handle_client(void* arg) {
 
 }
 
-FoodOrder food_queue[MAX_FOOD_ORDERS];
-int food_front = 0;
-int food_rear = 0;
-
-pthread_mutex_t food_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t food_cond = PTHREAD_COND_INITIALIZER;
-
-void enqueue_food(int table_id, int menu_id) {
-    food_queue[food_rear].table_id = table_id;
-    food_queue[food_rear].menu_id = menu_id;
-    food_rear = (food_rear + 1) % MAX_FOOD_ORDERS;
-}
-
-FoodOrder dequeue_food() {
-    FoodOrder f = food_queue[food_front];
-    food_front = (food_front + 1) % MAX_FOOD_ORDERS;
-    return f;
-}
-
-int is_food_queue_empty() {
-    return food_front == food_rear;
-}
 
 void* chef_thread(void* arg) {
     int chef_id = *(int*)arg;
@@ -205,12 +207,11 @@ void* chef_thread(void* arg) {
         FoodOrder order = dequeue_food();
         pthread_mutex_unlock(&food_mutex);
 
-        const char* emoji = get_emoji_by_menu_id(order.menu_id);
         const char* name = menu[order.menu_id - 1].name;
 
-        printf("เชฟ %d กำลังทำ: โต๊ะ %d สั่ง: %s %s\n", chef_id, order.table_id, emoji, name);
+        printf("เชฟ %d กำลังทำ: โต๊ะ %d สั่ง: %s\n", chef_id, order.table_id,  name);
         sleep(2);  
-        printf("เชฟ %d ทำเสร็จ: โต๊ะ %d สั่ง: %s %s\n", chef_id, order.table_id, emoji, name);
+        printf("เชฟ %d ทำเสร็จ: โต๊ะ %d สั่ง: %s\n", chef_id, order.table_id, name);
     }
 
     return NULL;

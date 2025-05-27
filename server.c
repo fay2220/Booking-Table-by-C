@@ -6,21 +6,29 @@
 #include <arpa/inet.h>
 
 #define PORT 8000
-#define MAX_CLIENTS 100
+#define MAX_CLIENTS 20
 
 #define MAX_TABLES 20
-#define TABLES_PER_ROW 4
 #define MAX_MENU 10
+#define NUM_CHEFS 3
+#define MAX_FOOD_ORDERS 100
 
 typedef struct {
-    int id;                     // เลขโต๊ะ 1-20
-    int is_occupied;            // 0 = ว่าง, 1 = ไม่ว่าง 
+    int table_id;
+    int menu_id;
+} FoodOrder;
+
+typedef struct {
+    int  id;                     // เลขโต๊ะ 1-20
+    int  is_occupied;            // 0 = ว่าง, 1 = ไม่ว่าง 
     char customer_name[50];     // ชื่อลูกค้า
     char order[200];            // รายการอาหารที่ลูกค้าสั่ง
+    int  new_order;          // 1 = มีออเดอร์ใหม่ที่ยังไม่ได้ปรุง
+    int  order_ready;  
 } Table;
 
 typedef struct {
-    int id;
+    int  id;
     char name[50];
     float price;
 } MenuItem;
@@ -45,6 +53,7 @@ void draw_tables(Table tables[], int total) {
     for (int i = 0; i < total; i++) {
         char* status;
         char* name;
+
         if(tables[i].is_occupied){
             status = "ไม่ว่าง";
             name = tables[i].customer_name;
@@ -54,7 +63,7 @@ void draw_tables(Table tables[], int total) {
             name = "ยังไม่มีลูกค้า";
         }
 
-        printf("║  %2d   ║  %-12s ║  %-8s ║\n", tables[i].id, status, name);
+        printf("║  %2d   ║  %-12s ║  %-8s ║\n", i+1, status, name);
     }
 
     printf("╚════════╩═══════════════╩════════════╝\n");
@@ -118,7 +127,6 @@ void* handle_client(void* arg) {
             break;  
         }
 
-
     }
 
     //รับรายการอาหาร วนรับเมนูหลายรายการ
@@ -133,10 +141,10 @@ void* handle_client(void* arg) {
             send(clientSd, msg, strlen(msg) + 1, 0);
 
             // ปล่อยโต๊ะ
-            tables[table_id - 1].is_occupied = 0;
-            strcpy(tables[table_id - 1].customer_name, "");
-            strcpy(tables[table_id - 1].order, "");
-            printf("โต๊ะ %d ถูกปล่อยแล้ว\n", table_id);
+            // tables[table_id - 1].is_occupied = 0;
+            // strcpy(tables[table_id - 1].customer_name, "");
+            // strcpy(tables[table_id - 1].order, "");
+            printf("โต๊ะ %d สั่งเสร็จแล้ว\n", table_id);
             break;
         }
 
@@ -145,14 +153,70 @@ void* handle_client(void* arg) {
             strcat(tables[table_id - 1].order, ",");
         }
         strcat(tables[table_id - 1].order, buffer);
+        int menu_id = atoi(buffer);
+
+        pthread_mutex_lock(&food_mutex);
+        enqueue_food(table_id, menu_id);
+        pthread_cond_signal(&food_cond);  // ปลุกเชฟ
+        pthread_mutex_unlock(&food_mutex);
+
 
         printf("โต๊ะ %d สั่งเมนู: %s\n", table_id, tables[table_id - 1].order);
         send(clientSd, "รับออเดอร์แล้ว", 1024, 0);
     }
 
-    close(clientSd);
+    return NULL;
+
+}
+
+FoodOrder food_queue[MAX_FOOD_ORDERS];
+int food_front = 0;
+int food_rear = 0;
+
+pthread_mutex_t food_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t food_cond = PTHREAD_COND_INITIALIZER;
+
+void enqueue_food(int table_id, int menu_id) {
+    food_queue[food_rear].table_id = table_id;
+    food_queue[food_rear].menu_id = menu_id;
+    food_rear = (food_rear + 1) % MAX_FOOD_ORDERS;
+}
+
+FoodOrder dequeue_food() {
+    FoodOrder f = food_queue[food_front];
+    food_front = (food_front + 1) % MAX_FOOD_ORDERS;
+    return f;
+}
+
+int is_food_queue_empty() {
+    return food_front == food_rear;
+}
+
+void* chef_thread(void* arg) {
+    int chef_id = *(int*)arg;
+    free(arg);
+
+    while (1) {
+        pthread_mutex_lock(&food_mutex);
+        while (is_food_queue_empty()) {
+            pthread_cond_wait(&food_cond, &food_mutex);
+        }
+
+        FoodOrder order = dequeue_food();
+        pthread_mutex_unlock(&food_mutex);
+
+        const char* emoji = get_emoji_by_menu_id(order.menu_id);
+        const char* name = menu[order.menu_id - 1].name;
+
+        printf("เชฟ %d กำลังทำ: โต๊ะ %d สั่ง: %s %s\n", chef_id, order.table_id, emoji, name);
+        sleep(2);  
+        printf("เชฟ %d ทำเสร็จ: โต๊ะ %d สั่ง: %s %s\n", chef_id, order.table_id, emoji, name);
+    }
+
     return NULL;
 }
+
+
 
 int main() {
    
@@ -171,6 +235,13 @@ int main() {
     bind(sd, (struct sockaddr*)&servAddr, sizeof(servAddr)); //ผูก socket sd กับ IP และ PORT ที่กำหนดไว้ใน servAddr
     listen(sd, 5);
     printf("Server กำลังรอ client บน port %d...\n", PORT);
+
+    pthread_t chef_threads[3];
+    for (int i = 0; i < 3; i++) {
+        int* id = malloc(sizeof(int));
+        *id = i + 1;
+        pthread_create(&chef_threads[i], NULL, chef_thread, id);
+    }
 
     while (1) {
         newSd = accept(sd, (struct sockaddr*)&cliAddr, &cliLen); //รอ client 

@@ -6,29 +6,21 @@
 #include <arpa/inet.h>
 
 #define PORT 8000
-#define MAX_CLIENTS 20
+#define MAX_CLIENTS 100
 
 #define MAX_TABLES 20
+#define TABLES_PER_ROW 4
 #define MAX_MENU 10
-#define NUM_CHEFS 3
-#define MAX_FOOD_ORDERS 100
 
 typedef struct {
-    int table_id;
-    int menu_id;
-} FoodOrder;
-
-typedef struct {
-    int  id;                   
-    int  is_occupied;            
-    char customer_name[50];     
-    char order[200];           
-    int  new_order;          
-    int  order_ready;  
+    int id;                     // เลขโต๊ะ 1-20
+    int is_occupied;            // 0 = ว่าง, 1 = ไม่ว่าง 
+    char customer_name[50];     // ชื่อลูกค้า
+    char order[200];            // รายการอาหารที่ลูกค้าสั่ง
 } Table;
 
 typedef struct {
-    int  id;
+    int id;
     char name[50];
     float price;
 } MenuItem;
@@ -53,7 +45,7 @@ void draw_tables(Table tables[], int total) {
     for (int i = 0; i < total; i++) {
         char* status;
         char* name;
-
+        
         if(tables[i].is_occupied){
             status = "ไม่ว่าง";
             name = tables[i].customer_name;
@@ -63,7 +55,7 @@ void draw_tables(Table tables[], int total) {
             name = "ยังไม่มีลูกค้า";
         }
 
-        printf("║  %2d   ║  %-12s ║  %-8s ║\n", i+1, status, name);
+        printf("║  %2d   ║  %-12s ║  %-8s ║\n", tables[i].id, status, name);
     }
 
     printf("╚════════╩═══════════════╩════════════╝\n");
@@ -72,68 +64,44 @@ void draw_tables(Table tables[], int total) {
 float calculate_total_price(char* order) {
     float total = 0.0;
     char temp[200];
+    strcpy(temp, order); 
+    char* token = strtok(temp, ","); //copy order ไปไว้ใน tempเพื่อให้ไม่ไปแก้ string ต้นฉบับ
 
-    strcpy(temp, order); //ก็อปข้อมูลมา มันจะได้ไม่ต้องไปแก้ในอันหลัก
-    char* pointer = strtok(temp, ","); 
-
-    while (pointer != NULL) {
-        int id = atoi(pointer); //แปลงจาก str เป็น int
+    while (token != NULL) {
+        int id = atoi(token); //แปลงจาก str เป็น int
         for (int i = 0; i < MAX_MENU; i++) {
             if (menu[i].id == id) {
                 total += menu[i].price;
                 break;
             }
         }
-        pointer = strtok(NULL, ",");
+        token = strtok(NULL, ",");
     }
 
     return total;
 }
 
-FoodOrder food_queue[MAX_FOOD_ORDERS];
-int food_front = 0; //หัวคิว
-int food_rear = 0; //ท้ายคิว
-
-pthread_mutex_t limit_thread = PTHREAD_MUTEX_INITIALIZER; //ป้องกันไม่ให้หลาย thread มาเข้าถึง food_queue พร้อมกัน
-pthread_cond_t call_chef = PTHREAD_COND_INITIALIZER; //ให้ เชฟรอ จนกว่าลูกค้าจะสั่งอาหาร
-
-
-int is_food_queue_empty() { //เท่ากันคือว่าง
-    return food_front == food_rear;
-}
-
-
-void Add_food_to_queue(int table_id, int menu_id) {
-    food_queue[food_rear].table_id = table_id; //บันทึกโต๊ะที่สั่ง
-    food_queue[food_rear].menu_id = menu_id; //บันทึกเมนูที่สั่ง
-    food_rear = (food_rear + 1) % MAX_FOOD_ORDERS; //food_rear บอกตำแหน่งที่จะเติมเมนูใหม่
-} //	% MAX_FOOD_ORDERS คือการทำให้ คิววนกลับไปต้นเมื่อถึงท้าย array
-
-FoodOrder dequeue_food() {
-    FoodOrder cooking_food = food_queue[food_front]; //ดึงออเดอร์ที่หัวคิว ออกมาเก็บไว้ในตัวแปร f
-    food_front = (food_front + 1) % MAX_FOOD_ORDERS; //ขยับ food_front ไปยังออเดอร์ถัดไป
-    return cooking_food;
-} 
-
 void* handle_client(void* arg) {
-    int clientSd = *(int*)arg; //รับ socket descriptor ของ client ที่ส่งเข้ามาผ่าน pthread_create เป็นค่าที่ใช้ในการ recv() และ send() ข้อมูลกับ client รายนี้
+    int clientSd = *(int*)arg; //รับ socket ที่ client เชื่อมเข้ามา
     int table_id;
-    int order_count = 0;
-    char buffer[1024];
+    char buffer[1024]; //ตัวแปรชั่วคราวไว้เก็บข้อความที่รับจาก client
     char customer_name[50];
-    free(arg);
-    
-    recv(clientSd, buffer, sizeof(buffer), 0); //รับข้อความแรกจาก client ซึ่งเป็น ชื่อของลูกค้า 
-    strcpy(customer_name, buffer);//ก๊อปชื่อจาก buffer ไปเก็บไว้ใน customer_name
+
+    free(arg); //คืนหน่วยความจำที่จองไว้ตอน malloc
+
+    //รับชื่อ
+    recv(clientSd, buffer, sizeof(buffer), 0); 
+    strcpy(customer_name, buffer); //copy ชื่อจาก buffer ไปไว้ใน customer_name
     printf("ลูกค้าใหม่: %s\n", customer_name);
 
-    while (1) {
+    while(1) {
+
         recv(clientSd, buffer, sizeof(buffer), 0);
         table_id = atoi(buffer);
 
         if (table_id < 1 || table_id > MAX_TABLES) {
             send(clientSd, "หมายเลขโต๊ะไม่ถูกต้อง กรุณาเลือกใหม่", 1024, 0);
-            continue;
+            continue;  
         }
 
         if (tables[table_id - 1].is_occupied) {
@@ -141,64 +109,43 @@ void* handle_client(void* arg) {
             continue;
         }
 
-        tables[table_id - 1].is_occupied = 1;
-        strcpy(tables[table_id - 1].customer_name, customer_name);
-        strcpy(tables[table_id - 1].order, "");
-        tables[table_id - 1].order_ready = 0;
+        else{
+            tables[table_id - 1].is_occupied = 1;
+            strcpy(tables[table_id - 1].customer_name, customer_name);
+            strcpy(tables[table_id - 1].order, "");  // เคลียร์ order
+            send(clientSd, "จองโต๊ะสำเร็จ", 1024, 0);
+            printf("%s จองโต๊ะที่ %d\n", customer_name, table_id);
+            draw_tables(tables, MAX_TABLES);
+            break;  
+        }
 
-        send(clientSd, "จองโต๊ะสำเร็จ", 1024, 0);
-        printf("%s จองโต๊ะที่ %d\n", customer_name, table_id);
-        draw_tables(tables, MAX_TABLES);
-        break;
+
     }
 
+    //รับรายการอาหาร วนรับเมนูหลายรายการ
     while (1) {
-        memset(buffer, 0, sizeof(buffer));
+        memset(buffer, 0, sizeof(buffer)); //เคลียร์ buffer ให้ว่าง เพื่อไม่ให้ข้อความใหม่ซ้อนกับข้อความเก่า
         recv(clientSd, buffer, sizeof(buffer), 0);
 
         if (strcmp(buffer, "exit") == 0) {
-            int already_notified = 0;
-            while (already_notified < order_count) {
-                if (tables[table_id - 1].order_ready > already_notified) {
-                    // แยกเมนูออกมาตามลำดับ
-                    char temp[200];
-                    strcpy(temp, tables[table_id - 1].order);
-                    char* token = strtok(temp, ",");
-                    for (int i = 0; i < already_notified; i++) token = strtok(NULL, ",");
-
-                    int menu_id = atoi(token);
-                    const char* food_name = menu[menu_id - 1].name;
-
-                    char msg[128];
-                    sprintf(msg, "อาหาร \"%s\" ของคุณเสร็จแล้ว!\n", food_name);
-                    send(clientSd, msg, strlen(msg), 0);
-
-                    already_notified++;
-                } else {
-                    sleep(1);
-                }
-            }
-
             float total = calculate_total_price(tables[table_id - 1].order);
             char msg[128];
-            sprintf(msg, "ยอดรวมทั้งหมด: %.2f บาท\n", total);
-            send(clientSd, msg, strlen(msg), 0);
+            sprintf(msg, "ยอดรวมทั้งหมด: %.2f บาท", total);
+            send(clientSd, msg, strlen(msg) + 1, 0);
 
-            printf("โต๊ะ %d สั่งเสร็จแล้ว\n", table_id);
+            // ปล่อยโต๊ะ
+            tables[table_id - 1].is_occupied = 0;
+            strcpy(tables[table_id - 1].customer_name, "");
+            strcpy(tables[table_id - 1].order, "");
+            printf("โต๊ะ %d ถูกปล่อยแล้ว\n", table_id);
             break;
         }
 
+        // เพิ่มเมนูต่อท้าย (เช่น "1,4,2")
         if (strlen(tables[table_id - 1].order) > 0) {
             strcat(tables[table_id - 1].order, ",");
         }
         strcat(tables[table_id - 1].order, buffer);
-        int menu_id = atoi(buffer);
-        order_count++;
-
-        pthread_mutex_lock(&limit_thread);
-        Add_food_to_queue(table_id, menu_id);
-        pthread_cond_signal(&call_chef);
-        pthread_mutex_unlock(&limit_thread);
 
         printf("โต๊ะ %d สั่งเมนู: %s\n", table_id, tables[table_id - 1].order);
         send(clientSd, "รับออเดอร์แล้ว", 1024, 0);
@@ -207,40 +154,6 @@ void* handle_client(void* arg) {
     close(clientSd);
     return NULL;
 }
-
-
-void* chef_thread(void* arg) {
-    int chef_id = *(int*)arg;
-    free(arg);
-
-    while (1) {
-        pthread_mutex_lock(&limit_thread);
-        while (is_food_queue_empty()) {
-            pthread_cond_wait(&call_chef, &limit_thread);
-        }
-
-        FoodOrder order = dequeue_food();
-        pthread_mutex_unlock(&limit_thread);
-
-        if (order.menu_id < 1 || order.menu_id > MAX_MENU) {
-            printf("เมนู ID %d ไม่ถูกต้อง ข้าม...\n", order.menu_id);
-            continue;
-        }
-
-
-        const char* name = menu[order.menu_id - 1].name;
-
-        printf("เชฟ %d กำลังทำ %s จากโต๊ะ %d \n", chef_id, order.table_id,  name);
-        sleep(5);  
-        printf("เชฟ %d ทำ %s ของโต๊ะ %d เสร็จแล้ว \n", chef_id, order.table_id, name);
-        tables[order.table_id - 1].order_ready++;
-        printf("");
-    }
-
-    return NULL;
-}
-
-
 
 int main() {
    
@@ -260,13 +173,6 @@ int main() {
     listen(sd, 5);
     printf("Server กำลังรอ client บน port %d...\n", PORT);
 
-    pthread_t chef_threads[3];
-    for (int i = 0; i < 3; i++) {
-        int* id = malloc(sizeof(int));
-        *id = i + 1;
-        pthread_create(&chef_threads[i], NULL, chef_thread, id);
-    }
-
     while (1) {
         newSd = accept(sd, (struct sockaddr*)&cliAddr, &cliLen); //รอ client 
         printf("Client ใหม่เชื่อมต่อ\n");// ถ้า client เข้ามาจะสร้าง socket ของตัวมันเอง
@@ -279,5 +185,3 @@ int main() {
     close(sd);
     return 0;
 }
-
-
